@@ -2,6 +2,7 @@ use std::f32::consts::PI;
 
 use bevy::{
     diagnostic::{EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
+    pbr::{CascadeShadowConfigBuilder, DirectionalLightShadowMap},
     prelude::*,
     window::PresentMode,
 };
@@ -10,6 +11,8 @@ use noise::{NoiseFn, Perlin};
 fn main() {
     App::new()
         .init_resource::<Noise>()
+        .init_resource::<CannonballMesh>()
+        .insert_resource(DirectionalLightShadowMap { size: 2048 })
         .add_plugins((
             DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
@@ -43,6 +46,11 @@ pub struct Velocity {
 }
 
 #[derive(Resource, Default)]
+pub struct CannonballMesh {
+    handle: Handle<Mesh>,
+}
+
+#[derive(Resource, Default)]
 pub struct Noise {
     generator: Perlin,
 }
@@ -70,14 +78,21 @@ fn setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut cannonball_mesh: ResMut<CannonballMesh>,
 ) {
     // sun
 
     commands.spawn(DirectionalLightBundle {
         directional_light: DirectionalLight {
             shadows_enabled: true,
-            ..default()
+            ..Default::default()
         },
+        cascade_shadow_config: CascadeShadowConfigBuilder {
+            num_cascades: 1,
+            maximum_distance: 80.0,
+            ..Default::default()
+        }
+        .into(),
         transform: Transform::default().looking_at(Vec3::new(0.717, -0.717, 0.0), Vec3::Y),
         ..default()
     });
@@ -117,19 +132,23 @@ fn setup(
         commands.spawn((
             PbrBundle {
                 mesh: asset_server.load("tank.glb#Mesh0/Primitive0"),
-                material: material.clone(),
+                material: material.clone_weak(),
                 ..default()
             },
             AiTank { id, material },
         ));
     }
+
+    // create cannonball mesh
+
+    cannonball_mesh.handle = asset_server.load("sphere.glb#Mesh0/Primitive0");
 }
 
 fn ai_tank_update(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
     time: Res<Time>,
     noise: Res<Noise>,
+    cannonball_mesh: Res<CannonballMesh>,
     mut query: Query<(&AiTank, &mut Transform)>,
 ) {
     for (tank, mut transform) in &mut query {
@@ -150,17 +169,17 @@ fn ai_tank_update(
 
         spawn_cannonball(
             &mut commands,
-            &asset_server,
             &transform,
-            tank.material.clone(),
+            cannonball_mesh.handle.clone_weak(),
+            tank.material.clone_weak(),
         );
     }
 }
 
 fn spawn_cannonball(
     commands: &mut Commands,
-    asset_server: &Res<AssetServer>,
     tank_transform: &Transform,
+    mesh: Handle<Mesh>,
     material: Handle<StandardMaterial>,
 ) {
     // Shoot from the tip of the cannon, which is (0.0, 1.235, 0.324) in local coordinates
@@ -182,7 +201,7 @@ fn spawn_cannonball(
 
     commands.spawn((
         PbrBundle {
-            mesh: asset_server.load("sphere.glb#Mesh0/Primitive0"),
+            mesh,
             material,
             transform,
             ..default()
@@ -212,10 +231,6 @@ fn cannonball_update(
                 velocity.val *= damping;
             }
 
-            // Acceleration due to gravity.
-
-            velocity.val.y -= 9.82 * time.delta_seconds();
-
             // Despawn if velocity drops low enough.
 
             if velocity.val.length_squared() < 0.1 {
@@ -223,6 +238,10 @@ fn cannonball_update(
                     commands.entity(entity).despawn();
                 });
             }
+
+            // Acceleration due to gravity.
+
+            velocity.val.y -= 9.82 * time.delta_seconds();
         });
 }
 
